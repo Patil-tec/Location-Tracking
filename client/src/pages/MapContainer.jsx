@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { MapContainer as LeafletMap, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MapContainer as LeafletMap, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { socket } from '../socket';
 
@@ -20,6 +20,17 @@ const customUserIcon = new L.Icon({
   popupAnchor: [1, -34],
   shadowSize: [41, 41]
 });
+
+// Helper component to dynamically change the map view when location updates
+function MapUpdater({ center, zoom }) {
+  const map = useMap();
+  useEffect(() => {
+    if (center && center[0] !== 20) {
+      map.flyTo(center, zoom, { animate: true, duration: 1.5 });
+    }
+  }, [center, zoom, map]);
+  return null;
+}
 
 export default function MapContainer({ userContext }) {
   const { userName, otp, users: initialUsers } = userContext;
@@ -50,25 +61,33 @@ export default function MapContainer({ userContext }) {
     });
 
     // 2. Start watching Geolocation
+    const handlePosition = (position) => {
+      const { latitude, longitude } = position.coords;
+      
+      // Update local state for map centering (if needed)
+      setMyLocation([latitude, longitude]);
+
+      // Update my own user object in the list
+      setUsers((prev) => 
+        prev.map(u => u.name === userName ? { ...u, lat: latitude, lng: longitude } : u)
+      );
+
+      // Emit to server
+      socket.emit('updateLocation', { lat: latitude, lng: longitude });
+    };
+
+    const handleError = (error) => {
+      console.error("Error watching geolocation", error);
+    };
+
     if ('geolocation' in navigator) {
+      // Get immediate position first
+      navigator.geolocation.getCurrentPosition(handlePosition, handleError, { enableHighAccuracy: true });
+
+      // Then watch for continuous updates
       watchIdRef.current = navigator.geolocation.watchPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
-          
-          // Update local state for map centering (if needed)
-          setMyLocation({ lat: latitude, lng: longitude });
-
-          // Update my own user object in the list
-          setUsers((prev) => 
-            prev.map(u => u.name === userName ? { ...u, lat: latitude, lng: longitude } : u)
-          );
-
-          // Emit to server
-          socket.emit('updateLocation', { lat: latitude, lng: longitude });
-        },
-        (error) => {
-          console.error("Error watching geolocation", error);
-        },
+        handlePosition,
+        handleError,
         { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
       );
     } else {
@@ -157,6 +176,7 @@ export default function MapContainer({ userContext }) {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+          <MapUpdater center={mapCenter} zoom={mapZoom} />
           
           {/* Render markers for users who have a location */}
           {usersWithLocation.map((u) => {
